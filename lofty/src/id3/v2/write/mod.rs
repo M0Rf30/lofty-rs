@@ -83,10 +83,14 @@ where
 
 	if dsd_format {
 		return match file.format() {
-			FileType::Dsf => crate::dsd::dsf::write_id3v2_to_dsf(&mut file.into_inner(), &id3v2)
-				.map_err(FileEncodingError::from),
-			FileType::Dff => crate::dsd::dff::write_id3v2_to_dff(&mut file.into_inner(), &id3v2)
-				.map_err(FileEncodingError::from),
+			FileType::Dsf => {
+				crate::dsd::dsf::write::write_id3v2_to_dsf(&mut file.into_inner(), &id3v2)
+					.map_err(FileEncodingError::from)
+			},
+			FileType::Dff => {
+				crate::dsd::dff::write::write_id3v2_to_dff(&mut file.into_inner(), &id3v2)
+					.map_err(FileEncodingError::from)
+			},
 			_ => unreachable!(),
 		};
 	}
