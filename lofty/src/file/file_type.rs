@@ -40,7 +40,8 @@ use std::path::Path;
 pub const EXTENSIONS: &[&str] = &[
 	// Also update `FileType::from_ext()` below
 	"aac", "ape", "aiff", "aif", "afc", "aifc", "mp3", "mp2", "mp1", "wav", "wv", "opus", "flac",
-	"ogg", "mp4", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp", "mpc", "mp+", "mpp", "spx",
+	"ogg", "mp4", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp", "mpc", "mp+", "mpp", "spx", "dsf",
+	"dff",
 ];
 
 /// The type of file read
@@ -55,6 +56,10 @@ pub enum FileType {
 	Aiff,
 	/// Monkey's Audio
 	Ape,
+	/// DSD Interchange File Format (DSDIFF)
+	Dff,
+	/// DSD Stream File (DSF)
+	Dsf,
 	/// Free Lossless Audio Codec
 	Flac,
 	/// MPEG-1/2 Audio (MP1, MP2, MP3)
@@ -102,7 +107,12 @@ impl FileType {
 	/// ```
 	pub fn primary_tag_type(&self) -> TagType {
 		match self {
-			FileType::Aac | FileType::Aiff | FileType::Mpeg | FileType::Wav => TagType::Id3v2,
+			FileType::Aac
+			| FileType::Aiff
+			| FileType::Dff
+			| FileType::Dsf
+			| FileType::Mpeg
+			| FileType::Wav => TagType::Id3v2,
 			FileType::Ape | FileType::Mpc | FileType::WavPack => TagType::Ape,
 			FileType::Flac | FileType::Opus | FileType::Vorbis | FileType::Speex => {
 				TagType::VorbisComments
@@ -168,6 +178,7 @@ impl FileType {
 			(VorbisComments, crate::ogg::tag::VorbisComments),
 			(RiffInfo, crate::iff::wav::RiffInfoList),
 			(AiffText, crate::iff::aiff::AiffTextChunks),
+			(DffText, crate::dsd::dff::DffTextChunks),
 		)
 	}
 
@@ -203,6 +214,8 @@ impl FileType {
 			"aac" => Some(Self::Aac),
 			"ape" => Some(Self::Ape),
 			"aiff" | "aif" | "afc" | "aifc" => Some(Self::Aiff),
+			"dsf" => Some(Self::Dsf),
+			"dff" => Some(Self::Dff),
 			"mp3" | "mp2" | "mp1" => Some(Self::Mpeg),
 			"wav" | "wave" => Some(Self::Wav),
 			"wv" => Some(Self::WavPack),
@@ -308,6 +321,7 @@ impl FileType {
 
 		// Safe to index, since we return early on an empty buffer
 		match buf[0] {
+			68 if buf.starts_with(b"DSD ") => Some(Self::Dsf),
 			77 if buf.starts_with(b"MAC") => Some(Self::Ape),
 			255 if buf.len() >= 2 && verify_frame_sync([buf[0], buf[1]]) => {
 				// ADTS and MPEG frame headers are way too similar
@@ -348,6 +362,14 @@ impl FileType {
 
 				if id == b"AIFF" || id == b"AIFC" {
 					return Some(Self::Aiff);
+				}
+
+				None
+			},
+			70 if buf.len() >= 16 && &buf[..4] == b"FRM8" => {
+				// DFF uses FRM8 container with "DSD " form type at offset 12
+				if &buf[12..16] == b"DSD " {
+					return Some(Self::Dff);
 				}
 
 				None
