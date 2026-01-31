@@ -52,6 +52,14 @@ where
 		tag.flags.footer = false;
 	}
 
+	// DSF stores the ID3v2 tag at the end of the file with a pointer in the header
+	// DFF stores the ID3v2 tag in an ID3 chunk within the IFF structure
+	let dsd_format = matches!(file.format(), FileType::Dsf | FileType::Dff);
+	if dsd_format {
+		// Footers don't make sense here either
+		tag.flags.footer = false;
+	}
+
 	let id3v2 = create_tag(tag, write_options).map_err(TagEncodingError::from)?;
 	if iff_format {
 		match file.format() {
@@ -71,6 +79,16 @@ where
 			},
 			_ => unreachable!(),
 		}
+	}
+
+	if dsd_format {
+		return match file.format() {
+			FileType::Dsf => crate::dsd::dsf::write_id3v2_to_dsf(&mut file.into_inner(), &id3v2)
+				.map_err(FileEncodingError::from),
+			FileType::Dff => crate::dsd::dff::write_id3v2_to_dff(&mut file.into_inner(), &id3v2)
+				.map_err(FileEncodingError::from),
+			_ => unreachable!(),
+		};
 	}
 
 	let mut file = file.into_inner();
