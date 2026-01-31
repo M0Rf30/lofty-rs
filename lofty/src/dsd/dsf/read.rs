@@ -2,7 +2,7 @@ use super::{
 	DATA_MAGIC, DSF_MAGIC, DsfFile, DsfProperties, FMT_CHUNK_SIZE, FMT_MAGIC, HEADER_SIZE,
 };
 use crate::config::ParseOptions;
-use crate::error::{ErrorKind, FileDecodingError, LoftyError, Result};
+use crate::error::{FileParseError, TagParseError, UnknownFormatError};
 use crate::file::FileType;
 use crate::id3::v2::header::Id3v2Header;
 use crate::id3::v2::read::parse_id3v2;
@@ -17,7 +17,10 @@ use byteorder::{LittleEndian, ReadBytesExt};
 /// # Errors
 ///
 /// Returns an error if the file is not a valid DSF file or if I/O fails
-pub(super) fn read_from<R: Read + Seek>(reader: &mut R, parse_options: ParseOptions) -> Result<DsfFile> {
+pub(super) fn read_from<R: Read + Seek>(
+	reader: &mut R,
+	parse_options: ParseOptions,
+) -> std::result::Result<DsfFile, FileParseError> {
 	// Read and validate header
 	let (_file_size, metadata_pointer) = read_header(reader)?;
 
@@ -30,8 +33,8 @@ pub(super) fn read_from<R: Read + Seek>(reader: &mut R, parse_options: ParseOpti
 	// Read ID3v2 tag if present
 	let id3v2_tag = if metadata_pointer > 0 {
 		reader.seek(SeekFrom::Start(metadata_pointer))?;
-		let header = Id3v2Header::parse(reader)?;
-		Some(parse_id3v2(reader, header, parse_options)?)
+		let header = Id3v2Header::parse(reader).map_err(TagParseError::from)?;
+		Some(parse_id3v2(reader, header, parse_options).map_err(TagParseError::from)?)
 	} else {
 		None
 	};
@@ -43,18 +46,18 @@ pub(super) fn read_from<R: Read + Seek>(reader: &mut R, parse_options: ParseOpti
 }
 
 /// Read DSF header (28 bytes, little-endian)
-fn read_header<R: Read>(reader: &mut R) -> Result<(u64, u64)> {
+fn read_header<R: Read>(reader: &mut R) -> std::result::Result<(u64, u64), FileParseError> {
 	// Magic number (4 bytes): "DSD "
 	let mut magic = [0u8; 4];
 	reader.read_exact(&mut magic)?;
 	if &magic != DSF_MAGIC {
-		return Err(LoftyError::new(ErrorKind::UnknownFormat));
+		return Err(UnknownFormatError.into());
 	}
 
 	// Chunk size (8 bytes): should be 28
 	let chunk_size = reader.read_u64::<LittleEndian>()?;
 	if chunk_size != HEADER_SIZE {
-		return Err(FileDecodingError::new(FileType::Dsf, "Invalid DSF header chunk size").into());
+		return Err(FileParseError::new(FileType::Dsf, "Invalid DSF header chunk size".into()));
 	}
 
 	// File size (8 bytes)
@@ -67,30 +70,30 @@ fn read_header<R: Read>(reader: &mut R) -> Result<(u64, u64)> {
 }
 
 /// Read format chunk (52 bytes, little-endian)
-fn read_format_chunk<R: Read>(reader: &mut R) -> Result<DsfProperties> {
+fn read_format_chunk<R: Read>(reader: &mut R) -> std::result::Result<DsfProperties, FileParseError> {
 	// Chunk ID (4 bytes): "fmt "
 	let mut magic = [0u8; 4];
 	reader.read_exact(&mut magic)?;
 	if &magic != FMT_MAGIC {
-		return Err(FileDecodingError::new(FileType::Dsf, "Expected fmt chunk").into());
+		return Err(FileParseError::new(FileType::Dsf, "Expected fmt chunk".into()));
 	}
 
 	// Chunk size (8 bytes): should be 52
 	let chunk_size = reader.read_u64::<LittleEndian>()?;
 	if chunk_size != FMT_CHUNK_SIZE {
-		return Err(FileDecodingError::new(FileType::Dsf, "Invalid fmt chunk size").into());
+		return Err(FileParseError::new(FileType::Dsf, "Invalid fmt chunk size".into()));
 	}
 
 	// Format version (4 bytes): should be 1
 	let format_version = reader.read_u32::<LittleEndian>()?;
 	if format_version != 1 {
-		return Err(FileDecodingError::new(FileType::Dsf, "Unsupported DSF format version").into());
+		return Err(FileParseError::new(FileType::Dsf, "Unsupported DSF format version".into()));
 	}
 
 	// Format ID (4 bytes): 0 = DSD Raw
 	let format_id = reader.read_u32::<LittleEndian>()?;
 	if format_id != 0 {
-		return Err(FileDecodingError::new(FileType::Dsf, "Only DSD Raw format supported").into());
+		return Err(FileParseError::new(FileType::Dsf, "Only DSD Raw format supported".into()));
 	}
 
 	// Channel type (4 bytes): 1=mono, 2=stereo, etc.
@@ -99,7 +102,7 @@ fn read_format_chunk<R: Read>(reader: &mut R) -> Result<DsfProperties> {
 	// Channel count (4 bytes)
 	let channel_count = reader.read_u32::<LittleEndian>()?;
 	if !(1..=6).contains(&channel_count) {
-		return Err(FileDecodingError::new(FileType::Dsf, "Invalid channel count").into());
+		return Err(FileParseError::new(FileType::Dsf, "Invalid channel count".into()));
 	}
 
 	// Convert channel type to channel mask
@@ -108,13 +111,13 @@ fn read_format_chunk<R: Read>(reader: &mut R) -> Result<DsfProperties> {
 	// Sampling frequency (4 bytes)
 	let sample_rate = reader.read_u32::<LittleEndian>()?;
 	if !matches!(sample_rate, 2_822_400 | 5_644_800 | 11_289_600 | 22_579_200) {
-		return Err(FileDecodingError::new(FileType::Dsf, "Invalid sample rate").into());
+		return Err(FileParseError::new(FileType::Dsf, "Invalid sample rate".into()));
 	}
 
 	// Bits per sample (4 bytes): 1 or 8
 	let bits_per_sample = reader.read_u32::<LittleEndian>()?;
 	if bits_per_sample != 1 && bits_per_sample != 8 {
-		return Err(FileDecodingError::new(FileType::Dsf, "Invalid bits per sample").into());
+		return Err(FileParseError::new(FileType::Dsf, "Invalid bits per sample".into()));
 	}
 
 	// Sample count (8 bytes)
@@ -136,12 +139,12 @@ fn read_format_chunk<R: Read>(reader: &mut R) -> Result<DsfProperties> {
 }
 
 /// Skip data chunk
-fn skip_data_chunk<R: Read + Seek>(reader: &mut R) -> Result<()> {
+fn skip_data_chunk<R: Read + Seek>(reader: &mut R) -> std::result::Result<(), FileParseError> {
 	// Chunk ID (4 bytes): "data"
 	let mut magic = [0u8; 4];
 	reader.read_exact(&mut magic)?;
 	if &magic != DATA_MAGIC {
-		return Err(FileDecodingError::new(FileType::Dsf, "Expected data chunk").into());
+		return Err(FileParseError::new(FileType::Dsf, "Expected data chunk".into()));
 	}
 
 	// Chunk size (8 bytes)
