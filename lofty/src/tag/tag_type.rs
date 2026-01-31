@@ -115,6 +115,8 @@ pub enum TagType {
 	RiffInfo,
 	/// Represents AIFF text chunks
 	AiffText,
+	/// Represents DFF (DSDIFF) text chunks
+	DffText,
 }
 
 impl TagType {
