@@ -1,10 +1,11 @@
 use crate::config::WriteOptions;
-use crate::error::LoftyError;
-use crate::tag::{Accessor, ItemKey, MergeTag, SplitTag, Tag, TagExt, TagType};
-use crate::util::io::{FileLike, Length, Truncate};
+use crate::error::{FileEncodingError, TagEncodingError};
+use crate::io::VerifiedFile;
+use crate::tag::{Accessor, ItemKey, MergeTag, SplitTag, Tag, TagExt, TagType, TagWriteExt};
+use crate::util::io::FileLike;
 
 use std::borrow::Cow;
-use std::io::Write;
+use std::io::{Seek, Write};
 
 use lofty_attr::tag;
 
@@ -70,13 +71,17 @@ where
 {
 	/// Write DFF text chunks to a file
 	#[allow(dead_code)]
-	pub fn write_to<F>(self, file: &mut F, _write_options: WriteOptions) -> crate::error::Result<()>
+	pub fn write_to<F>(
+		self,
+		file: VerifiedFile<'_, F>,
+		_write_options: WriteOptions,
+	) -> std::result::Result<(), FileEncodingError>
 	where
 		F: FileLike,
-		LoftyError: From<<F as Truncate>::Error>,
-		LoftyError: From<<F as Length>::Error>,
 	{
-		use crate::dsd::dff::write::{write_comt_to_dff, write_diin_to_dff};
+		use crate::dsd::dff::write_impl::{write_comt_to_dff, write_diin_to_dff};
+
+		let mut file = file.into_inner();
 
 		// No cloning needed - pass references directly
 		let diin_bytes = write::dump_diin_to_vec(self.diin);
@@ -84,11 +89,11 @@ where
 
 		// Write DIIN chunk
 		file.rewind()?;
-		write_diin_to_dff(file, &diin_bytes)?;
+		write_diin_to_dff(&mut file, &diin_bytes)?;
 
 		// Write COMT chunk
 		file.rewind()?;
-		write_comt_to_dff(file, &comt_bytes)
+		write_comt_to_dff(&mut file, &comt_bytes)
 	}
 }
 
@@ -254,7 +259,6 @@ impl From<Tag> for DffTextChunks {
 }
 
 impl TagExt for DffTextChunks {
-	type Err = LoftyError;
 	type RefKey<'a> = &'a ItemKey;
 
 	#[inline]
@@ -282,36 +286,40 @@ impl TagExt for DffTextChunks {
 		self.len() == 0
 	}
 
-	fn save_to<F>(
-		&self,
-		file: &mut F,
-		write_options: WriteOptions,
-	) -> std::result::Result<(), Self::Err>
-	where
-		F: FileLike,
-		LoftyError: From<<F as Truncate>::Error>,
-		LoftyError: From<<F as Length>::Error>,
-	{
-		// Defer to DffTextChunksRef for zero-copy writing
-		self.to_ref().write_to(file, write_options)
-	}
-
 	fn dump_to<W: Write>(
 		&self,
 		writer: &mut W,
 		_write_options: WriteOptions,
-	) -> std::result::Result<(), Self::Err> {
+	) -> std::result::Result<(), TagEncodingError> {
 		// Defer to DffTextChunksRef for zero-copy writing
 		let tag_ref = self.to_ref();
 		let diin_bytes = write::dump_diin_to_vec(tag_ref.diin);
-		writer.write_all(&diin_bytes)?;
+		writer
+			.write_all(&diin_bytes)
+			.map_err(|e| TagEncodingError::new(TagType::DffText, Box::new(e)))?;
 		let comt_bytes = write::dump_comt_to_vec(tag_ref.comments);
-		writer.write_all(&comt_bytes)?;
+		writer
+			.write_all(&comt_bytes)
+			.map_err(|e| TagEncodingError::new(TagType::DffText, Box::new(e)))?;
 		Ok(())
 	}
 
 	fn clear(&mut self) {
 		*self = Self::default();
+	}
+}
+
+impl TagWriteExt for DffTextChunks {
+	fn save_to<F>(
+		&self,
+		file: VerifiedFile<'_, F>,
+		write_options: WriteOptions,
+	) -> std::result::Result<(), FileEncodingError>
+	where
+		F: FileLike,
+	{
+		// Defer to DffTextChunksRef for zero-copy writing
+		self.to_ref().write_to(file, write_options)
 	}
 }
 
